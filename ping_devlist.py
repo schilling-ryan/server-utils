@@ -43,7 +43,8 @@ def ping_host(host):
                                 # Sanitize output using the sed from the original script
                                 sanitized = line
                                 sanitized = re.sub(r'[0-9]{2} bytes.+\(', '', sanitized)
-                                sanitized = re.sub(r'\).+time=', ' : ', sanitized)
+                                sanitized = re.sub(r'[0-9]{1,3} bytes from ', '', sanitized)
+                                sanitized = re.sub(r'\)?:.+time=', ' : ', sanitized)
                                 sanitized = re.sub(r'ping6?: \S+: ', '', sanitized)
                                 return [f"{host} : {sanitized}", True]
                 return [f"{host} : Address resolution or ping failure", False]
