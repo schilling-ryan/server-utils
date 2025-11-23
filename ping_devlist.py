@@ -51,6 +51,60 @@ def ping_host(host):
         except Exception as e:
                 return [f"{host} : Error - {e}", False]
 
+def test_connectivity(results, test_url):
+        print(f"\nTesting connectivity to {test_url}")
+        for res in results:
+            host = res.split(' : ')[0]
+            url = "https://" + host + test_url
+            try:
+                curl_cmd = ["curl", "-s", "-v", url]
+                result = subprocess.run(curl_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            except Exception as e:
+                print(f"{host} : Error executing curl - {e}")
+                continue
+            try:
+                output = result.stdout + result.stderr if result.stderr else result.stdout
+                http_code = "000"
+                response_body = ""
+                redirect_url = ""
+                # Look for HTTP response line in verbose output
+                for line in output.split('\n'):
+                        # Match HTTP response status line
+                        if re.search(r'< HTTP/\d+\.\d+ (\d{3})', line):
+                                match = re.search(r'< HTTP/\d+\.\d+ (\d{3})', line)
+                                if match:
+                                        http_code = match.group(1)
+                        # Look for Location header for redirects
+                        elif re.search(r'< [Ll]ocation:\s*(.+)', line):
+                                match = re.search(r'< [Ll]ocation:\s*(.+)', line)
+                                if match:
+                                        redirect_url = match.group(1).strip()
+
+                # Get response body (everything after the headers in verbose output)
+                body_start = output.find('\r\n\r\n')
+                if body_start != -1:
+                        response_body = output[body_start + 4:]
+                else:
+                        response_body = ""
+                reason = ""
+                if re.search("Post not found", response_body):
+                        reason = "Post not found"
+                elif re.search("Found", response_body):
+                        reason = "Found (redirect)"
+                elif result.returncode != 0:
+                        reason = "Connection failed"
+                
+                if http_code == "200":
+                        print(f"{host} : Connectivity test successful (HTTP 200)")
+                if http_code in ["301", "302"] and redirect_url:
+                        print(f"{host} : Connectivity test redirected (HTTP {http_code}) to {redirect_url}")
+                else:
+                        if reason:
+                                print(f"{host} : Connectivity test failed (HTTP {http_code}) - {reason}")
+                        else:
+                                print(f"{host} : Connectivity test failed (HTTP {http_code})")
+            except Exception as e:
+                print(f"{host} : Error during connectivity test - {e}")
 def main():
         parser = argparse.ArgumentParser(description="Ping devices from a list")
         parser.add_argument("devlist", help="Path to the device list file")
@@ -58,6 +112,8 @@ def main():
         parser.add_argument("field", nargs="?", type=int, default=1, help="Field number for the device IPs")
         parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
         parser.add_argument("-f", "--file", help="Output file to save results")
+        parser.add_argument("-s", "--silent", action="store_true", help="Silent mode, suppress failures")
+        parser.add_argument("-t", "--test", help="URL path to test connectivity to (results not written to file). Only the path should be provided, e.g. /path/to/my.html")
         args = parser.parse_args()
         
         delimiter = args.delimiter if args.delimiter else " "
@@ -74,6 +130,7 @@ def main():
         print(f"{len(devices)} device(s) found")
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             results = []
+            results_to_test = []
             failures = 0
             # Submit all tasks
             futures = [executor.submit(ping_host, host) for host in devices]
@@ -81,7 +138,10 @@ def main():
             for f in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Pinging devices"):
                 if not f.result()[1]:  # If ping was unsuccessful
                     failures += 1
-                results.append(f.result()[0])
+                if f.result()[1] or (not args.silent and not f.result()[1]):
+                    results.append(f.result()[0])
+                if f.result()[1]:
+                    results_to_test.append(f.result()[0])
         if args.file:
             try:
                 with open(args.file, 'w') as f:
@@ -94,5 +154,8 @@ def main():
                 print(res)
         print(f"\n{len(devices)} devices pinged, {failures} failed.")
 
+        if args.test:
+            test_connectivity(results_to_test, args.test)
+        
 if __name__ == "__main__":
     main()
